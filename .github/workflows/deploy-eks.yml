@@ -79,14 +79,18 @@ jobs:
           kubectl config current-context
 
       # ---------- Aplicar manifests base ----------
+      # ---------- Aplicar manifests base ----------
       - name: Aplicar manifests base (namespace, DB, servicios)
         env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           EKS_NAMESPACE: ${{ secrets.EKS_NAMESPACE }}
         run: |
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/mysql-secret.yaml -n $EKS_NAMESPACE
           kubectl apply -f k8s/mysql-deployment.yaml -n $EKS_NAMESPACE
           kubectl apply -f k8s/mysql-service.yaml -n $EKS_NAMESPACE
+          # [CORRECCIÓN PROFE 1]: Inyectar el tag real a la base de datos
+          kubectl set image deployment/tienda-db mysql=$ECR_REGISTRY/${ECR_REPO_DB}:${IMAGE_TAG} -n $EKS_NAMESPACE
 
       # ---------- Actualizar BACKEND en EKS ----------
       - name: Actualizar BACKEND en EKS
@@ -107,11 +111,20 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           EKS_NAMESPACE: ${{ secrets.EKS_NAMESPACE }}
         run: |
+          # 1. Aplicamos los archivos base
           kubectl apply -f k8s/frontend-deployment.yaml -n $EKS_NAMESPACE
           kubectl apply -f k8s/frontend-service.yaml -n $EKS_NAMESPACE
+          
+          # 2. [CORRECCIÓN PROFE 2]: Limpiar cualquier variable BACKEND_URL residual automática
+          kubectl set env deployment/tienda-frontend BACKEND_URL- -n $EKS_NAMESPACE
+          
+          # 3. Seteamos la imagen con el contenedor correcto ('frontend')
           kubectl set image deployment/tienda-frontend \
             frontend=$ECR_REGISTRY/${ECR_REPO_FRONTEND}:${IMAGE_TAG} \
             -n $EKS_NAMESPACE
+            
+          # 4. Forzamos un reinicio limpio para evitar problemas de caché de DNS de Nginx
+          kubectl rollout restart deployment/tienda-frontend -n $EKS_NAMESPACE
           kubectl rollout status deployment/tienda-frontend -n $EKS_NAMESPACE
 
       # ---------- HPA (si existen los YAML) ----------
